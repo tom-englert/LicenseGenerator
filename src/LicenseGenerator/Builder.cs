@@ -212,9 +212,10 @@ internal sealed class Builder
                     }
                 }
             }
-            catch (Exception ex)
+            catch
             {
                 Output.WriteError($"Error loading license metadata for package {packageId}");
+                throw;
             }
 
             content.AppendLine();

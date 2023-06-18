@@ -1,0 +1,47 @@
+This product bundles the following components under the described licenses:
+
+--------------------------------------------------------------------------------
+
+MSBuild Locator
+
+Id:      Microsoft.Build.Locator
+Version: 1.5.5
+Project: https://github.com/microsoft/MSBuildLocator
+License: MIT
+
+--------------------------------------------------------------------------------
+
+NuGet.ProjectModel
+
+Id:      NuGet.ProjectModel
+Version: 6.6.1
+Project: https://aka.ms/nugetprj
+License: Apache-2.0
+
+--------------------------------------------------------------------------------
+
+NuGet.Protocol
+
+Id:      NuGet.Protocol
+Version: 6.6.1
+Project: https://aka.ms/nugetprj
+License: Apache-2.0
+
+--------------------------------------------------------------------------------
+
+System.CommandLine
+
+Id:      System.CommandLine
+Version: 2.0.0-beta4.22272.1
+Project: https://github.com/dotnet/command-line-api
+License: MIT
+
+--------------------------------------------------------------------------------
+
+Tom's Toolbox Essentials Module
+
+Id:      TomsToolbox.Essentials
+Version: 2.8.10
+Project: https://github.com/tom-englert/TomsToolbox
+License: MIT
+

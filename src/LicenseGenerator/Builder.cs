@@ -10,6 +10,7 @@ using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
+using NuGet.ProjectModel;
 using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
 
@@ -83,11 +84,7 @@ internal sealed class Builder
     private async Task<ICollection<PackageArchiveReader>> LoadPackages()
     {
         var packageIdentities = _includedProjects.Values
-            .SelectMany(info => info.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
-            .Where(item => item.GetMetadata("PrivateAssets") == null)
-            .Select(item => new { Id = item.EvaluatedInclude, Version = item.GetMetadata("Version")?.EvaluatedValue })
-            .Where(item => !string.IsNullOrEmpty(item.Version))
-            .Select(item => new PackageIdentity(item.Id, NuGetVersion.Parse(item.Version!)))
+            .SelectMany(GetPackageIdentities)
             .Distinct(new DelegateEqualityComparer<PackageIdentity>(item => item?.Id))
             .OrderBy(item => item.Id)
             .ToArray();
@@ -101,6 +98,43 @@ internal sealed class Builder
         var packages = (await Task.WhenAll(packageIdentities.Select(item => LoadPackage(item, repositories, cacheContext))));
 
         return packages.ExceptNullItems().ToArray();
+    }
+
+    private static IEnumerable<PackageIdentity> GetPackageIdentities(ProjectInfo projectInfo)
+    {
+        LockFile? lockFile = null;
+
+        foreach (var packageReference in projectInfo.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
+        {
+            if (packageReference.GetMetadata("PrivateAssets") != null)
+                continue;
+
+            if (packageReference.GetMetadata("ExcludeAssets")?.EvaluatedValue.Contains("runtime") == true)
+                continue;
+
+            var identity = packageReference.EvaluatedInclude;
+            var version = packageReference.GetMetadata("Version")?.EvaluatedValue;
+
+            if (string.IsNullOrEmpty(version))
+                continue;
+
+            if (!NuGetVersion.TryParse(version, out var nugetVersion))
+            {
+                // version is not a simple version string, but maybe a version range like "[1.0-2.0)" or "1.0.*"
+                // => try to read the restored version from the lock file
+                try
+                {
+                    lockFile ??= projectInfo.GetLockFile();
+                    nugetVersion = lockFile.Libraries.Single(library => library.Name == identity).Version;
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Unable to find version of package {identity}, restoring nuget packages first may fix this.", ex);
+                }
+            }
+
+            yield return new PackageIdentity(identity, nugetVersion);
+        }
     }
 
     private static async Task<PackageArchiveReader?> LoadPackage(PackageIdentity packageIdentity, IEnumerable<SourceRepository> repositories, SourceCacheContext cacheContext)
@@ -291,7 +325,11 @@ internal sealed class Builder
         }
     }
 
-    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project);
+    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project)
+    {
+        public LockFile GetLockFile() => LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
+
+    }
 
     private static async Task<ICollection<string>> DownloadLicense(string url)
     {

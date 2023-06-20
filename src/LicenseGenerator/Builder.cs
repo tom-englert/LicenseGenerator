@@ -76,34 +76,36 @@ internal sealed class Builder
         Output.WriteLine();
         Output.WriteLine($"Create: '{_outputPath}'");
 
-        await CreateLicenseFile(packages);
+        var content = await CreateLicenseFile(packages);
+
+        await File.WriteAllTextAsync(_outputPath, content);
 
         return 0;
     }
 
     private async Task<ICollection<PackageArchiveReader>> LoadPackages()
     {
-        var packageIdentities = _includedProjects.Values
-            .SelectMany(GetPackageIdentities)
-            .Distinct(new DelegateEqualityComparer<PackageIdentity>(item => item?.Id))
-            .OrderBy(item => item.Id)
-            .ToArray();
-
         var packageSourceProvider = new PackageSourceProvider(new Settings(_solutionDirectory));
         var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
         var repositories = sourceRepositoryProvider.GetRepositories().ToArray();
 
         using var cacheContext = new SourceCacheContext();
 
-        var packages = (await Task.WhenAll(packageIdentities.Select(item => LoadPackage(item, repositories, cacheContext))));
+        var resolvedPackages = new Dictionary<string, PackageArchiveReader>(StringComparer.OrdinalIgnoreCase);
 
-        return packages.ExceptNullItems().ToArray();
+        foreach (var project in _includedProjects.Values)
+        {
+            foreach (var packageIdentity in GetPackageIdentities(project))
+            {
+                await LoadPackage(project, packageIdentity, repositories, cacheContext, resolvedPackages);
+            }
+        }
+
+        return resolvedPackages.Values;
     }
 
     private static IEnumerable<PackageIdentity> GetPackageIdentities(ProjectInfo projectInfo)
     {
-        LockFile? lockFile = null;
-
         foreach (var packageReference in projectInfo.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
         {
             if (packageReference.GetMetadata("PrivateAssets") != null)
@@ -118,27 +120,44 @@ internal sealed class Builder
             if (string.IsNullOrEmpty(version))
                 continue;
 
-            if (!NuGetVersion.TryParse(version, out var nugetVersion))
-            {
-                // version is not a simple version string, but maybe a version range like "[1.0-2.0)" or "1.0.*"
-                // => try to read the restored version from the lock file
-                try
-                {
-                    lockFile ??= projectInfo.GetLockFile();
-                    nugetVersion = lockFile.Libraries.Single(library => library.Name == identity).Version;
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException($"Unable to find version of package {identity}, restoring nuget packages first may fix this.", ex);
-                }
-            }
-
-            yield return new PackageIdentity(identity, nugetVersion);
+            yield return GetPackageIdentity(projectInfo, identity, version);
         }
     }
 
-    private static async Task<PackageArchiveReader?> LoadPackage(PackageIdentity packageIdentity, IEnumerable<SourceRepository> repositories, SourceCacheContext cacheContext)
+    private static PackageIdentity GetPackageIdentity(ProjectInfo projectInfo, string identity, string? version = null)
     {
+        var nugetVersion = GetPackageVersion(projectInfo, identity, version);
+
+        var packageIdentity = new PackageIdentity(identity, nugetVersion);
+        
+        return packageIdentity;
+    }
+
+    private static NuGetVersion GetPackageVersion(ProjectInfo projectInfo, string identity, string? version = null)
+    {
+        if (NuGetVersion.TryParse(version, out var nugetVersion)) 
+            return nugetVersion;
+        
+        // version is not a simple version string, but maybe a version range like "[1.0-2.0)" or "1.0.*"
+        // => try to read the restored version from the lock file
+        try
+        {
+            var lockFile = projectInfo.LockFile;
+            nugetVersion = lockFile.Libraries.Single(library => library.Name == identity).Version;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Unable to find unique version of package {identity}, restoring nuget packages first may fix this.", ex);
+        }
+
+        return nugetVersion;
+    }
+
+    private async Task LoadPackage(ProjectInfo projectInfo, PackageIdentity packageIdentity, ICollection<SourceRepository> repositories, SourceCacheContext cacheContext, IDictionary<string, PackageArchiveReader> resolvedPackages)
+    {
+        if (resolvedPackages.ContainsKey(packageIdentity.Id))
+            return;
+
         Output.WriteLine($"Load: {packageIdentity}");
 
         foreach (var repository in repositories)
@@ -150,19 +169,46 @@ internal sealed class Builder
                 NullLogger.Instance, CancellationToken.None);
 
             packageStream.Position = 0;
-            return new PackageArchiveReader(packageStream);
-        }
 
-        return null;
+            var package = new PackageArchiveReader(packageStream);
+
+            resolvedPackages.Add(packageIdentity.Id, package);
+
+            await using var nuspec = package.GetNuspec();
+            var spec = new NuspecReader(nuspec);
+            var projectUrl = spec.GetProjectUrl();
+            if (!string.IsNullOrEmpty(projectUrl)) 
+                continue;
+
+            // we don't have license information for this package, so scan dependencies
+            var dependencies = package
+                .GetPackageDependencies()
+                .SelectMany(dependencyGroup => dependencyGroup.Packages.Select(dependency => dependency.Id));
+
+            foreach (var dependency in dependencies)
+            {
+                try
+                {
+                    var identity = GetPackageIdentity(projectInfo, dependency);
+                    await LoadPackage(projectInfo, identity, repositories, cacheContext, resolvedPackages);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Ignore dependencies that can't be loaded.
+                }
+            }
+        }
     }
 
-    private async Task CreateLicenseFile(IEnumerable<PackageArchiveReader> packages)
+    private async Task<string> CreateLicenseFile(IEnumerable<PackageArchiveReader> packages)
     {
         var content = new StringBuilder("This product bundles the following components under the described licenses:\r\n\r\n");
 
-        foreach (var package in packages)
+        foreach (var package in packages.OrderBy(p => p.GetIdentity().Id))
         {
-            var spec = new NuspecReader(package.GetNuspec());
+            await using var nuspec = package.GetNuspec();
+
+            var spec = new NuspecReader(nuspec);
 
             var packageId = spec.GetId();
 
@@ -255,7 +301,7 @@ internal sealed class Builder
             content.AppendLine();
         }
 
-        await File.WriteAllTextAsync(_outputPath, content.ToString());
+        return content.ToString();
     }
 
     private void AddProject(ProjectInfo projectInfo, int level = 0)
@@ -327,7 +373,9 @@ internal sealed class Builder
 
     private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project)
     {
-        public LockFile GetLockFile() => LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
+        private LockFile? _lockFile;
+
+        public LockFile LockFile => _lockFile ??= LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
 
     }
 

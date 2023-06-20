@@ -49,7 +49,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="..\Notice.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\Notice.txt" Pack="true" PackagePath="\" />
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
@@ -63,4 +63,8 @@
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="TomsToolbox.Essentials" Version="2.8.10" />
   </ItemGroup>
+
+  <Target Name="CreateNotice" AfterTargets="Build">
+    <Exec Command="$(RunCommand) -i ../LicenseGenerator.sln -o ..\..\Notice.txt" />
+  </Target>
 </Project>

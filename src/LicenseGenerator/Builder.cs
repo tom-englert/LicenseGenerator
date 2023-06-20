@@ -85,7 +85,7 @@ internal sealed class Builder
 
     private async Task<ICollection<PackageArchiveReader>> LoadPackages()
     {
-        var packageSourceProvider = new PackageSourceProvider(new Settings(_solutionDirectory));
+        var packageSourceProvider = new PackageSourceProvider(Settings.LoadDefaultSettings(_solutionDirectory));
         var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
         var repositories = sourceRepositoryProvider.GetRepositories().ToArray();
 
@@ -169,6 +169,8 @@ internal sealed class Builder
                 NullLogger.Instance, CancellationToken.None);
 
             packageStream.Position = 0;
+            if (packageStream.Length == 0)
+                continue; // Try next repo
 
             var package = new PackageArchiveReader(packageStream);
 
@@ -178,7 +180,7 @@ internal sealed class Builder
             var spec = new NuspecReader(nuspec);
             var projectUrl = spec.GetProjectUrl();
             if (!string.IsNullOrEmpty(projectUrl)) 
-                continue;
+                return;
 
             // we don't have license information for this package, so scan dependencies
             var dependencies = package
@@ -197,6 +199,8 @@ internal sealed class Builder
                     // Ignore dependencies that can't be loaded.
                 }
             }
+
+            return;
         }
     }
 

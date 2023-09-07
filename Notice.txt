@@ -5,7 +5,7 @@ This product bundles the following components under the described licenses:
 MSBuild Locator
 
 Id:      Microsoft.Build.Locator
-Version: 1.5.5
+Version: 1.6.1
 Project: https://github.com/microsoft/MSBuildLocator
 License: MIT
 
@@ -14,7 +14,7 @@ License: MIT
 NuGet.ProjectModel
 
 Id:      NuGet.ProjectModel
-Version: 6.6.1
+Version: 6.7.0
 Project: https://aka.ms/nugetprj
 License: Apache-2.0
 
@@ -23,7 +23,7 @@ License: Apache-2.0
 NuGet.Protocol
 
 Id:      NuGet.Protocol
-Version: 6.6.1
+Version: 6.7.0
 Project: https://aka.ms/nugetprj
 License: Apache-2.0
 

@@ -129,15 +129,15 @@ internal sealed class Builder
         var nugetVersion = GetPackageVersion(projectInfo, identity, version);
 
         var packageIdentity = new PackageIdentity(identity, nugetVersion);
-        
+
         return packageIdentity;
     }
 
     private static NuGetVersion GetPackageVersion(ProjectInfo projectInfo, string identity, string? version = null)
     {
-        if (NuGetVersion.TryParse(version, out var nugetVersion)) 
+        if (NuGetVersion.TryParse(version, out var nugetVersion))
             return nugetVersion;
-        
+
         // version is not a simple version string, but maybe a version range like "[1.0-2.0)" or "1.0.*"
         // => try to read the restored version from the lock file
         try
@@ -153,10 +153,12 @@ internal sealed class Builder
         return nugetVersion;
     }
 
-    private async Task LoadPackage(ProjectInfo projectInfo, PackageIdentity packageIdentity, ICollection<SourceRepository> repositories, SourceCacheContext cacheContext, IDictionary<string, PackageArchiveReader> resolvedPackages)
+    private static async Task LoadPackage(ProjectInfo projectInfo, PackageIdentity packageIdentity, SourceRepository[] repositories, SourceCacheContext cacheContext, Dictionary<string, PackageArchiveReader> resolvedPackages)
     {
-        if (resolvedPackages.ContainsKey(packageIdentity.Id))
+        if (resolvedPackages.TryGetValue(packageIdentity.Id, out var existingPackage) && existingPackage.GetIdentity().Version >= packageIdentity.Version)
+        {
             return;
+        }
 
         Output.WriteLine($"Load: {packageIdentity}");
 
@@ -165,8 +167,8 @@ internal sealed class Builder
             var resource = await repository.GetResourceAsync<FindPackageByIdResource>();
 
             var packageStream = new MemoryStream();
-            await resource.CopyNupkgToStreamAsync(packageIdentity.Id, packageIdentity.Version, packageStream, cacheContext,
-                NullLogger.Instance, CancellationToken.None);
+            if (!await resource.CopyNupkgToStreamAsync(packageIdentity.Id, packageIdentity.Version, packageStream, cacheContext, NullLogger.Instance, CancellationToken.None).ConfigureAwait(false))
+                continue; // Try next repo
 
             packageStream.Position = 0;
             if (packageStream.Length == 0)
@@ -174,12 +176,12 @@ internal sealed class Builder
 
             var package = new PackageArchiveReader(packageStream);
 
-            resolvedPackages.Add(packageIdentity.Id, package);
+            resolvedPackages[packageIdentity.Id] = package;
 
             await using var nuspec = package.GetNuspec();
             var spec = new NuspecReader(nuspec);
             var projectUrl = spec.GetProjectUrl();
-            if (!string.IsNullOrEmpty(projectUrl)) 
+            if (!string.IsNullOrEmpty(projectUrl))
                 return;
 
             // we don't have license information for this package, so scan dependencies

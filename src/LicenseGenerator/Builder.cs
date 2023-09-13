@@ -8,6 +8,7 @@ using Microsoft.Build.Evaluation;
 
 using NuGet.Common;
 using NuGet.Configuration;
+using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
 using NuGet.ProjectModel;
@@ -18,19 +19,22 @@ using TomsToolbox.Essentials;
 
 using static Constants;
 
-internal sealed class Builder
+internal sealed class Builder : IDisposable
 {
     private static readonly string Delimiter = new('-', 80);
 
     private readonly ProjectInfo[] _projects;
     private readonly Dictionary<string, ProjectInfo> _includedProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _outputPath;
+    private readonly bool _recursive;
     private readonly string _solutionDirectory;
     private readonly Regex? _excludeRegex;
+    private readonly Dictionary<NuGetFramework, TargetFrameworkCollection> _targetFrameworkCollections = new();
 
-    public Builder(FileInfo input, string output, string? exclude)
+    public Builder(FileInfo input, string output, string? exclude, bool recursive)
     {
         _outputPath = output;
+        _recursive = recursive;
         _solutionDirectory = input.DirectoryName ?? ".";
         _excludeRegex = string.IsNullOrEmpty(exclude) ? null : new Regex(exclude, RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
@@ -44,7 +48,7 @@ internal sealed class Builder
 
         var solution = SolutionFile.Parse(input.FullName);
 
-        _projects = LoadProjects(solution)
+        _projects = LoadProjects(solution, _targetFrameworkCollections)
             .ExceptNullItems()
             .ToArray();
 
@@ -95,18 +99,23 @@ internal sealed class Builder
 
         foreach (var project in _includedProjects.Values)
         {
-            foreach (var packageIdentity in GetPackageIdentities(project))
+            var frameworkSpecificProjects = project.GetFrameworkSpecificProjects().ToArray();
+
+            foreach (var frameworkSpecificProject in frameworkSpecificProjects)
             {
-                await LoadPackage(project, packageIdentity, repositories, cacheContext, resolvedPackages);
+                foreach (var packageIdentity in GetPackageIdentities(frameworkSpecificProject))
+                {
+                    await LoadPackage(frameworkSpecificProject, packageIdentity, repositories, cacheContext, resolvedPackages);
+                }
             }
         }
 
         return resolvedPackages.Values;
     }
 
-    private static IEnumerable<PackageIdentity> GetPackageIdentities(ProjectInfo projectInfo)
+    private static IEnumerable<PackageIdentity> GetPackageIdentities(FrameworkSpecificProject project)
     {
-        foreach (var packageReference in projectInfo.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
+        foreach (var packageReference in project.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
         {
             if (packageReference.GetMetadata("PrivateAssets") != null)
                 continue;
@@ -120,20 +129,20 @@ internal sealed class Builder
             if (string.IsNullOrEmpty(version))
                 continue;
 
-            yield return GetPackageIdentity(projectInfo, identity, version);
+            yield return GetPackageIdentity(project, identity, version);
         }
     }
 
-    private static PackageIdentity GetPackageIdentity(ProjectInfo projectInfo, string identity, string? version = null)
+    private static PackageIdentity GetPackageIdentity(FrameworkSpecificProject project, string identity, string? version = null)
     {
-        var nugetVersion = GetPackageVersion(projectInfo, identity, version);
+        var nugetVersion = GetPackageVersion(project, identity, version);
 
         var packageIdentity = new PackageIdentity(identity, nugetVersion);
 
         return packageIdentity;
     }
 
-    private static NuGetVersion GetPackageVersion(ProjectInfo projectInfo, string identity, string? version = null)
+    private static NuGetVersion GetPackageVersion(FrameworkSpecificProject project, string identity, string? version = null)
     {
         if (NuGetVersion.TryParse(version, out var nugetVersion))
             return nugetVersion;
@@ -142,7 +151,7 @@ internal sealed class Builder
         // => try to read the restored version from the lock file
         try
         {
-            var lockFile = projectInfo.LockFile;
+            var lockFile = project.LockFile;
             nugetVersion = lockFile.Libraries.Single(library => library.Name == identity).Version;
         }
         catch (Exception ex)
@@ -153,7 +162,27 @@ internal sealed class Builder
         return nugetVersion;
     }
 
-    private static async Task LoadPackage(ProjectInfo projectInfo, PackageIdentity packageIdentity, SourceRepository[] repositories, SourceCacheContext cacheContext, Dictionary<string, PackageArchiveReader> resolvedPackages)
+    private static NuGetFramework ToPlatformVersionIndependent(NuGetFramework framework)
+    {
+        return new NuGetFramework(framework.Framework, framework.Version, framework.Platform, new Version());
+    }
+
+    private static NuGetFramework? GetNearestFramework(ICollection<NuGetFramework> items, NuGetFramework framework)
+    {
+        return NuGetFrameworkUtility.GetNearest(items, framework, item => item)
+               // also match "net6.0-windows7.0" and "net6.0-windows"
+               ?? NuGetFrameworkUtility.GetNearest(items, ToPlatformVersionIndependent(framework), ToPlatformVersionIndependent);
+    }
+
+    private static T? GetNearestFramework<T>(ICollection<T> items, NuGetFramework framework)
+        where T : class, IFrameworkSpecific
+    {
+        return NuGetFrameworkUtility.GetNearest(items, framework)
+               // also match "net6.0-windows7.0" and "net6.0-windows"
+               ?? NuGetFrameworkUtility.GetNearest(items, ToPlatformVersionIndependent(framework), item => ToPlatformVersionIndependent(item.TargetFramework));
+    }
+
+    private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, SourceRepository[] repositories, SourceCacheContext cacheContext, Dictionary<string, PackageArchiveReader> resolvedPackages)
     {
         if (resolvedPackages.TryGetValue(packageIdentity.Id, out var existingPackage) && existingPackage.GetIdentity().Version >= packageIdentity.Version)
         {
@@ -179,22 +208,41 @@ internal sealed class Builder
             resolvedPackages[packageIdentity.Id] = package;
 
             await using var nuspec = package.GetNuspec();
-            var spec = new NuspecReader(nuspec);
-            var projectUrl = spec.GetProjectUrl();
-            if (!string.IsNullOrEmpty(projectUrl))
+
+            bool ScanDependencies()
+            {
+                // Don't scan packages with pseudo-references, they don't get physically included.
+                if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (_recursive)
+                    return true;
+
+                if (!string.IsNullOrEmpty(new NuspecReader(nuspec).GetProjectUrl()))
+                    return false;
+
+                Output.WriteLine($"  - No project url found in {packageIdentity}, scanning dependencies");
+                return true;
+
+            }
+
+            if (!ScanDependencies())
                 return;
 
-            // we don't have license information for this package, so scan dependencies
-            var dependencies = package
-                .GetPackageDependencies()
-                .SelectMany(dependencyGroup => dependencyGroup.Packages.Select(dependency => dependency.Id));
+            var packageDependencies = package.GetPackageDependencies()?.ToArray();
+            if (packageDependencies is null)
+                return;
+
+            var bestMatching = GetNearestFramework(packageDependencies, project.TargetFramework);
+            var dependencies = bestMatching?.Packages
+                               ?? packageDependencies.SelectMany(item => item.Packages).Distinct();
 
             foreach (var dependency in dependencies)
             {
                 try
                 {
-                    var identity = GetPackageIdentity(projectInfo, dependency);
-                    await LoadPackage(projectInfo, identity, repositories, cacheContext, resolvedPackages);
+                    var identity = GetPackageIdentity(project, dependency.Id);
+                    await LoadPackage(project, identity, repositories, cacheContext, resolvedPackages);
                 }
                 catch (InvalidOperationException)
                 {
@@ -354,7 +402,7 @@ internal sealed class Builder
         return bool.TryParse(property?.EvaluatedValue, out var include) && include;
     }
 
-    private static IEnumerable<ProjectInfo?> LoadProjects(SolutionFile solution)
+    private static IEnumerable<ProjectInfo?> LoadProjects(SolutionFile solution, Dictionary<NuGetFramework, TargetFrameworkCollection> targetFrameworkCollections)
     {
         foreach (var projectReference in solution.ProjectsInOrder)
         {
@@ -366,7 +414,10 @@ internal sealed class Builder
             try
             {
                 Output.WriteLine($"Load: {projectReference.RelativePath}");
-                projectInfo = new ProjectInfo(projectReference, new Project(projectReference.AbsolutePath));
+
+                var project = new Project(projectReference.AbsolutePath);
+
+                projectInfo = new ProjectInfo(projectReference, project, GetTargetFrameworks(project), targetFrameworkCollections);
             }
             catch (Exception ex)
             {
@@ -377,12 +428,73 @@ internal sealed class Builder
         }
     }
 
-    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project)
+    private static NuGetFramework[] GetTargetFrameworks(Project project)
+    {
+        var frameworkNames = (project.GetProperty("TargetFrameworks") ?? project.GetProperty("TargetFramework"))
+            ?.EvaluatedValue
+            ?.Split(';')
+            .Select(value => value.Trim());
+
+        var frameworks = frameworkNames?
+            .Select(NuGetFramework.Parse)
+            .Distinct()
+            .ToArray();
+
+        return frameworks ?? new[] { NuGetFramework.AnyFramework };
+    }
+
+    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project, NuGetFramework[] TargetFrameworks, Dictionary<NuGetFramework, TargetFrameworkCollection> TargetFrameworkCollections)
+    {
+        public IEnumerable<FrameworkSpecificProject> GetFrameworkSpecificProjects()
+        {
+            return TargetFrameworks.Select(GetProjectInFramework);
+        }
+
+        private FrameworkSpecificProject GetProjectInFramework(NuGetFramework targetFramework)
+        {
+            if (TargetFrameworks.Length <= 1)
+                return new FrameworkSpecificProject(this, Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
+
+            var bestMatching = GetNearestFramework(TargetFrameworks, targetFramework);
+            if (bestMatching == null)
+                return new FrameworkSpecificProject(this, Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
+
+            var collection = TargetFrameworkCollections.ForceValue(bestMatching, framework => new TargetFrameworkCollection(framework));
+
+            return new FrameworkSpecificProject(this, collection.LoadProject(ProjectReference.AbsolutePath), bestMatching);
+        }
+    }
+
+    private sealed record FrameworkSpecificProject(ProjectInfo ProjectInfo, Project Project, NuGetFramework TargetFramework)
     {
         private LockFile? _lockFile;
 
         public LockFile LockFile => _lockFile ??= LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
+    }
 
+    private sealed class TargetFrameworkCollection : IDisposable
+    {
+        private readonly ProjectCollection _projectCollection;
+
+        public TargetFrameworkCollection(NuGetFramework framework)
+        {
+            var properties = new Dictionary<string, string>
+            {
+                { "TargetFramework", framework.GetShortFolderName() }
+            };
+
+            _projectCollection = new ProjectCollection(properties);
+        }
+
+        public Project LoadProject(string filePath)
+        {
+            return _projectCollection.LoadProject(filePath);
+        }
+
+        public void Dispose()
+        {
+            _projectCollection.Dispose();
+        }
     }
 
     private static async Task<ICollection<string>> DownloadLicense(string url)
@@ -395,6 +507,14 @@ internal sealed class Builder
         catch
         {
             return Array.Empty<string>();
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (var collection in _targetFrameworkCollections.Values)
+        {
+            collection.Dispose();
         }
     }
 }

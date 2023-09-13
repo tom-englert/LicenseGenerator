@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net6.0;net48</TargetFrameworks>
+    <LangVersion>11.0</LangVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Label="License" Condition="'$(Configuration)'=='Debug'">
+    <IsDeploymentTarget>true</IsDeploymentTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nullable.Extended.Analyzer" Version="1.10.4539" PrivateAssets="all" />
+    <PackageReference Include="TomsToolbox.Essentials" Version="2.8.10" Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp'" />
+    <PackageReference Include="TomsToolbox.Essentials" Version="2.8.9" Condition="'$(TargetFrameworkIdentifier)' == '.NetFramework'" />
+  </ItemGroup>
+
+</Project>

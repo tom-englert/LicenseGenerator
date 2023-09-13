@@ -48,23 +48,29 @@ var excludeOption = new Option<string?>(new[] { "--exclude", "-e" }, """
     A regular expression to specify package ids to exclude from output.
     """) { IsRequired = false };
 
+var recursiveOption = new Option<bool>(new[] { "--recursive" }, """
+    A flag to indicate that all dependencies should be scanned recursively.                                                            
+    """) { IsRequired = false };
+
 rootCommand.AddOption(inputOption);
 rootCommand.AddOption(outputOption);
 rootCommand.AddOption(excludeOption);
-rootCommand.SetHandler(async (input, output, exclude) => returnValue = await Run(input, output, exclude), inputOption, outputOption, excludeOption);
+rootCommand.AddOption(recursiveOption);
+rootCommand.SetHandler(async (input, output, exclude, recursive) => returnValue = await Run(input, output, exclude, recursive), inputOption, outputOption, excludeOption, recursiveOption);
 
 await rootCommand.InvokeAsync(args);
 
 return returnValue;
 
-static async Task<int> Run(FileInfo input, string? output, string? exclude)
+static async Task<int> Run(FileInfo input, string? output, string? exclude, bool recursive)
 {
     var visualStudioInstance = MSBuildLocator.QueryVisualStudioInstances().MaxBy(instance => instance.Version);
     MSBuildLocator.RegisterInstance(visualStudioInstance);
 
     try
     {
-        return await new Builder(input, output ?? "Notice.txt", exclude).Build();
+        using var builder = new Builder(input, output ?? "Notice.txt", exclude, recursive);
+        return await builder.Build();
     }
     catch (Exception ex)
     {

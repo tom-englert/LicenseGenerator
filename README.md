@@ -43,6 +43,7 @@ build-license [options]
                                   An existing file will be overwritten without confirmation.
                                   Default is Notice.txt in the same folder as the solution.
   -e, --exclude <exclude>         A regular expression to specify package ids to exclude from output.
+  --recursive                     A flag to indicate that all dependencies should be scanned recursively.
   --version                       Show version information
   -?, -h, --help                  Show help and usage information
 ```

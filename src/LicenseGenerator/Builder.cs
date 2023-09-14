@@ -12,7 +12,7 @@ using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
 using NuGet.ProjectModel;
-using NuGet.Protocol.Core.Types;
+using NuGet.Protocol;
 using NuGet.Versioning;
 
 using TomsToolbox.Essentials;
@@ -89,11 +89,8 @@ internal sealed class Builder : IDisposable
 
     private async Task<ICollection<PackageArchiveReader>> LoadPackages()
     {
-        var packageSourceProvider = new PackageSourceProvider(Settings.LoadDefaultSettings(_solutionDirectory));
-        var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
-        var repositories = sourceRepositoryProvider.GetRepositories().ToArray();
-
-        using var cacheContext = new SourceCacheContext();
+        var settings = Settings.LoadDefaultSettings(_solutionDirectory);
+        var globalPackagesFolder = SettingsUtility.GetGlobalPackagesFolder(settings);
 
         var resolvedPackages = new Dictionary<string, PackageArchiveReader>(StringComparer.OrdinalIgnoreCase);
 
@@ -105,7 +102,7 @@ internal sealed class Builder : IDisposable
             {
                 foreach (var packageIdentity in GetPackageIdentities(frameworkSpecificProject))
                 {
-                    await LoadPackage(frameworkSpecificProject, packageIdentity, repositories, cacheContext, resolvedPackages);
+                    await LoadPackage(frameworkSpecificProject, packageIdentity, resolvedPackages, globalPackagesFolder);
                 }
             }
         }
@@ -182,7 +179,7 @@ internal sealed class Builder : IDisposable
                ?? NuGetFrameworkUtility.GetNearest(items, ToPlatformVersionIndependent(framework), item => ToPlatformVersionIndependent(item.TargetFramework));
     }
 
-    private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, SourceRepository[] repositories, SourceCacheContext cacheContext, Dictionary<string, PackageArchiveReader> resolvedPackages)
+    private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, IDictionary<string, PackageArchiveReader> resolvedPackages, string globalPackagesFolder)
     {
         if (resolvedPackages.TryGetValue(packageIdentity.Id, out var existingPackage) && existingPackage.GetIdentity().Version >= packageIdentity.Version)
         {
@@ -191,66 +188,60 @@ internal sealed class Builder : IDisposable
 
         Output.WriteLine($"Load: {packageIdentity}");
 
-        foreach (var repository in repositories)
+        var localCached = GlobalPackagesFolderUtility.GetPackage(packageIdentity, globalPackagesFolder);
+        if (localCached == null)
         {
-            var resource = await repository.GetResourceAsync<FindPackageByIdResource>();
+            throw new InvalidOperationException($"Unable to find package {packageIdentity} in the local cache, restoring nuget packages first may fix this.");
+        }
 
-            var packageStream = new MemoryStream();
-            if (!await resource.CopyNupkgToStreamAsync(packageIdentity.Id, packageIdentity.Version, packageStream, cacheContext, NullLogger.Instance, CancellationToken.None).ConfigureAwait(false))
-                continue; // Try next repo
+        var packageStream = localCached.PackageStream;
+        packageStream.Position = 0;
 
-            packageStream.Position = 0;
-            if (packageStream.Length == 0)
-                continue; // Try next repo
+        var package = new PackageArchiveReader(packageStream);
 
-            var package = new PackageArchiveReader(packageStream);
+        resolvedPackages[packageIdentity.Id] = package;
 
-            resolvedPackages[packageIdentity.Id] = package;
+        await using var nuspec = package.GetNuspec();
 
-            await using var nuspec = package.GetNuspec();
+        bool ScanDependencies()
+        {
+            // Don't scan packages with pseudo-references, they don't get physically included.
+            if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
+                return false;
 
-            bool ScanDependencies()
-            {
-                // Don't scan packages with pseudo-references, they don't get physically included.
-                if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
-                    return false;
-
-                if (_recursive)
-                    return true;
-
-                if (!string.IsNullOrEmpty(new NuspecReader(nuspec).GetProjectUrl()))
-                    return false;
-
-                Output.WriteLine($"  - No project url found in {packageIdentity}, scanning dependencies");
+            if (_recursive)
                 return true;
 
-            }
+            if (!string.IsNullOrEmpty(new NuspecReader(nuspec).GetProjectUrl()))
+                return false;
 
-            if (!ScanDependencies())
-                return;
+            Output.WriteLine($"  - No project url found in {packageIdentity}, scanning dependencies");
+            return true;
 
-            var packageDependencies = package.GetPackageDependencies()?.ToArray();
-            if (packageDependencies is null)
-                return;
+        }
 
-            var bestMatching = GetNearestFramework(packageDependencies, project.TargetFramework);
-            var dependencies = bestMatching?.Packages
-                               ?? packageDependencies.SelectMany(item => item.Packages).Distinct();
-
-            foreach (var dependency in dependencies)
-            {
-                try
-                {
-                    var identity = GetPackageIdentity(project, dependency.Id);
-                    await LoadPackage(project, identity, repositories, cacheContext, resolvedPackages);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Ignore dependencies that can't be loaded.
-                }
-            }
-
+        if (!ScanDependencies())
             return;
+
+        var packageDependencies = package.GetPackageDependencies()?.ToArray();
+        if (packageDependencies is null)
+            return;
+
+        var bestMatching = GetNearestFramework(packageDependencies, project.TargetFramework);
+        var dependencies = bestMatching?.Packages
+                           ?? packageDependencies.SelectMany(item => item.Packages).Distinct();
+
+        foreach (var dependency in dependencies)
+        {
+            try
+            {
+                var identity = GetPackageIdentity(project, dependency.Id);
+                await LoadPackage(project, identity, resolvedPackages, globalPackagesFolder);
+            }
+            catch (InvalidOperationException)
+            {
+                // Ignore dependencies that can't be loaded.
+            }
         }
     }
 

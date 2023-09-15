@@ -12,7 +12,7 @@ using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
 using NuGet.ProjectModel;
-using NuGet.Protocol;
+using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
 
 using TomsToolbox.Essentials;
@@ -91,6 +91,12 @@ internal sealed class Builder : IDisposable
     {
         var settings = Settings.LoadDefaultSettings(_solutionDirectory);
         var globalPackagesFolder = SettingsUtility.GetGlobalPackagesFolder(settings);
+        var packageSourceProvider = new PackageSourceProvider(settings);
+        var sourceRepositoryProvider = new SourceRepositoryProvider(packageSourceProvider, Repository.Provider.GetCoreV3());
+        var repositories = sourceRepositoryProvider.GetRepositories().ToArray();
+
+        using var cacheContext = new SourceCacheContext();
+        var downloadContext = new PackageDownloadContext(cacheContext);
 
         var resolvedPackages = new Dictionary<string, PackageArchiveReader>(StringComparer.OrdinalIgnoreCase);
 
@@ -102,7 +108,7 @@ internal sealed class Builder : IDisposable
             {
                 foreach (var packageIdentity in GetPackageIdentities(frameworkSpecificProject))
                 {
-                    await LoadPackage(frameworkSpecificProject, packageIdentity, resolvedPackages, globalPackagesFolder);
+                    await LoadPackage(frameworkSpecificProject, packageIdentity, repositories, downloadContext, resolvedPackages, globalPackagesFolder);
                 }
             }
         }
@@ -179,8 +185,10 @@ internal sealed class Builder : IDisposable
                ?? NuGetFrameworkUtility.GetNearest(items, ToPlatformVersionIndependent(framework), item => ToPlatformVersionIndependent(item.TargetFramework));
     }
 
-    private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, IDictionary<string, PackageArchiveReader> resolvedPackages, string globalPackagesFolder)
+    private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, ICollection<SourceRepository> repositories, PackageDownloadContext context, IDictionary<string, PackageArchiveReader> resolvedPackages, string globalPackagesFolder)
     {
+        List<string> lastExceptions = new List<string>();
+
         if (resolvedPackages.TryGetValue(packageIdentity.Id, out var existingPackage) && existingPackage.GetIdentity().Version >= packageIdentity.Version)
         {
             return;
@@ -188,61 +196,78 @@ internal sealed class Builder : IDisposable
 
         Output.WriteLine($"Load: {packageIdentity}");
 
-        var localCached = GlobalPackagesFolderUtility.GetPackage(packageIdentity, globalPackagesFolder);
-        if (localCached == null)
+        foreach (var repository in repositories)
         {
-            throw new InvalidOperationException($"Unable to find package {packageIdentity} in the local cache, restoring nuget packages first may fix this.");
-        }
+            DownloadResourceResult downloadResult;
 
-        var packageStream = localCached.PackageStream;
-        packageStream.Position = 0;
-
-        var package = new PackageArchiveReader(packageStream);
-
-        resolvedPackages[packageIdentity.Id] = package;
-
-        await using var nuspec = package.GetNuspec();
-
-        bool ScanDependencies()
-        {
-            // Don't scan packages with pseudo-references, they don't get physically included.
-            if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            if (_recursive)
-                return true;
-
-            if (!string.IsNullOrEmpty(new NuspecReader(nuspec).GetProjectUrl()))
-                return false;
-
-            Output.WriteLine($"  - No project url found in {packageIdentity}, scanning dependencies");
-            return true;
-
-        }
-
-        if (!ScanDependencies())
-            return;
-
-        var packageDependencies = package.GetPackageDependencies()?.ToArray();
-        if (packageDependencies is null)
-            return;
-
-        var bestMatching = GetNearestFramework(packageDependencies, project.TargetFramework);
-        var dependencies = bestMatching?.Packages
-                           ?? packageDependencies.SelectMany(item => item.Packages).Distinct();
-
-        foreach (var dependency in dependencies)
-        {
             try
             {
-                var identity = GetPackageIdentity(project, dependency.Id);
-                await LoadPackage(project, identity, resolvedPackages, globalPackagesFolder);
+                var downloadResource = await repository.GetResourceAsync<DownloadResource>();
+
+                downloadResult = await downloadResource.GetDownloadResourceResultAsync(packageIdentity, context, globalPackagesFolder, NullLogger.Instance, CancellationToken.None);
             }
-            catch (InvalidOperationException)
+            catch (NuGetProtocolException ex)
             {
-                // Ignore dependencies that can't be loaded.
+                lastExceptions.Add(ex.Message);
+                continue;  // Try next repo
             }
+
+            if (downloadResult.Status != DownloadResourceResultStatus.Available)
+                continue;  // Try next repo
+
+            var packageStream = downloadResult.PackageStream;
+            packageStream.Position = 0;
+
+            var package = new PackageArchiveReader(packageStream);
+
+            resolvedPackages[packageIdentity.Id] = package;
+
+            await using var nuspec = package.GetNuspec();
+
+            bool ScanDependencies()
+            {
+                // Don't scan packages with pseudo-references, they don't get physically included.
+                if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (_recursive)
+                    return true;
+
+                if (!string.IsNullOrEmpty(new NuspecReader(nuspec).GetProjectUrl()))
+                    return false;
+
+                Output.WriteLine($"  - No project url found in {packageIdentity}, scanning dependencies");
+                return true;
+
+            }
+
+            if (!ScanDependencies())
+                return;
+
+            var packageDependencies = package.GetPackageDependencies()?.ToArray();
+            if (packageDependencies is null)
+                return;
+
+            var bestMatching = GetNearestFramework(packageDependencies, project.TargetFramework);
+            var dependencies = bestMatching?.Packages
+                               ?? packageDependencies.SelectMany(item => item.Packages).Distinct();
+
+            foreach (var dependency in dependencies)
+            {
+                try
+                {
+                    var identity = GetPackageIdentity(project, dependency.Id);
+                    await LoadPackage(project, identity, repositories, context, resolvedPackages, globalPackagesFolder);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Ignore dependencies that can't be loaded.
+                }
+            }
+            return;
         }
+
+        throw new InvalidOperationException($"Package {packageIdentity} not found in any of the configured repositories: {string.Join(", ", lastExceptions)}");
     }
 
     private async Task<string> CreateLicenseFile(IEnumerable<PackageArchiveReader> packages)
@@ -423,7 +448,7 @@ internal sealed class Builder : IDisposable
     {
         var frameworkNames = (project.GetProperty("TargetFrameworks") ?? project.GetProperty("TargetFramework"))
             ?.EvaluatedValue
-            ?.Split(';')
+            .Split(';')
             .Select(value => value.Trim());
 
         var frameworks = frameworkNames?
@@ -444,19 +469,19 @@ internal sealed class Builder : IDisposable
         private FrameworkSpecificProject GetProjectInFramework(NuGetFramework targetFramework)
         {
             if (TargetFrameworks.Length <= 1)
-                return new FrameworkSpecificProject(this, Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
+                return new FrameworkSpecificProject(Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
 
             var bestMatching = GetNearestFramework(TargetFrameworks, targetFramework);
             if (bestMatching == null)
-                return new FrameworkSpecificProject(this, Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
+                return new FrameworkSpecificProject(Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
 
             var collection = TargetFrameworkCollections.ForceValue(bestMatching, framework => new TargetFrameworkCollection(framework));
 
-            return new FrameworkSpecificProject(this, collection.LoadProject(ProjectReference.AbsolutePath), bestMatching);
+            return new FrameworkSpecificProject(collection.LoadProject(ProjectReference.AbsolutePath), bestMatching);
         }
     }
 
-    private sealed record FrameworkSpecificProject(ProjectInfo ProjectInfo, Project Project, NuGetFramework TargetFramework)
+    private sealed record FrameworkSpecificProject(Project Project, NuGetFramework TargetFramework)
     {
         private LockFile? _lockFile;
 

@@ -24,7 +24,6 @@ internal sealed class Builder : IDisposable
 {
     private static readonly string Delimiter = new('-', 80);
 
-    private readonly ProjectInfo[] _projects;
     private readonly Dictionary<string, ProjectInfo> _includedProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _outputPath;
     private readonly bool _recursive;
@@ -32,6 +31,9 @@ internal sealed class Builder : IDisposable
     private readonly string _solutionDirectory;
     private readonly Regex? _excludeRegex;
     private readonly Dictionary<NuGetFramework, TargetFrameworkCollection> _targetFrameworkCollections = new();
+    private readonly string _solutionFile;
+
+    private ProjectInfo[] _projects = Array.Empty<ProjectInfo>();
 
     public Builder(FileInfo input, string output, string? exclude, bool recursive, bool offline)
     {
@@ -46,20 +48,22 @@ internal sealed class Builder : IDisposable
             _outputPath = Path.Combine(_solutionDirectory, _outputPath);
         }
 
-        Output.WriteLine($"Solution: '{input}'");
+        _solutionFile = input.FullName;
+    }
+
+    public async Task<int> Build()
+    {
+        Output.WriteLine($"Solution: '{_solutionFile}'");
         Output.WriteLine();
 
-        var solution = SolutionFile.Parse(input.FullName);
+        var solution = SolutionFile.Parse(_solutionFile);
 
         _projects = LoadProjects(solution, _targetFrameworkCollections)
             .ExceptNullItems()
             .ToArray();
 
         Output.WriteLine();
-    }
 
-    public async Task<int> Build()
-    {
         foreach (var project in _projects)
         {
             if (!ShouldInclude(project))
@@ -351,6 +355,10 @@ internal sealed class Builder : IDisposable
                     if (licenseUrl.IsApache2License())
                     {
                         content.AppendLine(ApacheLicenseExpression);
+                    }
+                    else if (licenseUrl.IsMicrosoftNetLibrary())
+                    {
+                        content.AppendLine(MicrosoftNetLibraryLicenseExpression);
                     }
                     else
                     {

@@ -22,6 +22,11 @@ internal static class ExtensionMethods
         return value?.Contains(Constants.ApacheLicenseUrl, StringComparison.OrdinalIgnoreCase) == true;
     }
 
+    public static bool IsMicrosoftNetLibrary(this string? value)
+    {
+        return value?.Equals(Constants.MicrosoftNetLibraryUrl, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
     public static string FormatLicenseText(this IEnumerable<string> lines)
     {
         return lines

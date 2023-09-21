@@ -36,7 +36,7 @@ dotnet tool install TomsToolbox.LicenseGenerator -g
 ```
 build-license [options]
 ```
-#### Options
+### Options
 ```
   -i, --input <input> (REQUIRED)  The path to the solution file to process.
   -o, --output <output>           The name of the license file that is created.
@@ -44,6 +44,7 @@ build-license [options]
                                   Default is Notice.txt in the same folder as the solution.
   -e, --exclude <exclude>         A regular expression to specify package ids to exclude from output.
   --recursive                     A flag to indicate that all dependencies should be scanned recursively.
+  --offline                       A flag to indicate that only the locally cached packages should be scanned (requires a restor beforehand).
   --version                       Show version information
   -?, -h, --help                  Show help and usage information
 ```

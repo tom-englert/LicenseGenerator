@@ -55,7 +55,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Build" Version="[17.4.0]" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.Build.Locator" Version="1.6.1" />
+    <PackageReference Include="Microsoft.Build.Locator" Version="1.6.10" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" Version="[17.4.0]" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="all" />
     <PackageReference Include="NuGet.ProjectModel" Version="6.7.0" />
@@ -65,6 +65,6 @@
   </ItemGroup>
 
   <Target Name="CreateNotice" AfterTargets="Build">
-    <Exec Command="$(RunCommand) -i ../LicenseGenerator.sln -o ..\..\Notice.txt" />
+    <Exec Command='"$(RunCommand)" -i ../LicenseGenerator.sln -o ..\..\Notice.txt' />
   </Target>
 </Project>

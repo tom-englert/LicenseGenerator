@@ -12,6 +12,7 @@ using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
 using NuGet.ProjectModel;
+using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
 using NuGet.Versioning;
 
@@ -27,14 +28,16 @@ internal sealed class Builder : IDisposable
     private readonly Dictionary<string, ProjectInfo> _includedProjects = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _outputPath;
     private readonly bool _recursive;
+    private readonly bool _offline;
     private readonly string _solutionDirectory;
     private readonly Regex? _excludeRegex;
     private readonly Dictionary<NuGetFramework, TargetFrameworkCollection> _targetFrameworkCollections = new();
 
-    public Builder(FileInfo input, string output, string? exclude, bool recursive)
+    public Builder(FileInfo input, string output, string? exclude, bool recursive, bool offline)
     {
         _outputPath = output;
         _recursive = recursive;
+        _offline = offline;
         _solutionDirectory = input.DirectoryName ?? ".";
         _excludeRegex = string.IsNullOrEmpty(exclude) ? null : new Regex(exclude, RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
@@ -187,7 +190,7 @@ internal sealed class Builder : IDisposable
 
     private async Task LoadPackage(FrameworkSpecificProject project, PackageIdentity packageIdentity, ICollection<SourceRepository> repositories, PackageDownloadContext context, IDictionary<string, PackageArchiveReader> resolvedPackages, string globalPackagesFolder)
     {
-        List<string> lastExceptions = new List<string>();
+        var lastExceptions = new List<string>();
 
         if (resolvedPackages.TryGetValue(packageIdentity.Id, out var existingPackage) && existingPackage.GetIdentity().Version >= packageIdentity.Version)
         {
@@ -198,19 +201,7 @@ internal sealed class Builder : IDisposable
 
         foreach (var repository in repositories)
         {
-            DownloadResourceResult downloadResult;
-
-            try
-            {
-                var downloadResource = await repository.GetResourceAsync<DownloadResource>();
-
-                downloadResult = await downloadResource.GetDownloadResourceResultAsync(packageIdentity, context, globalPackagesFolder, NullLogger.Instance, CancellationToken.None);
-            }
-            catch (NuGetProtocolException ex)
-            {
-                lastExceptions.Add(ex.Message);
-                continue;  // Try next repo
-            }
+            var downloadResult = await GetDownloadResultAsync(packageIdentity, context, globalPackagesFolder, repository, lastExceptions);
 
             if (downloadResult.Status != DownloadResourceResultStatus.Available)
                 continue;  // Try next repo
@@ -224,7 +215,7 @@ internal sealed class Builder : IDisposable
 
             await using var nuspec = package.GetNuspec();
 
-            bool ScanDependencies()
+            bool ShouldScanDependencies()
             {
                 // Don't scan packages with pseudo-references, they don't get physically included.
                 if (string.Equals(packageIdentity.Id, "NETStandard.Library", StringComparison.OrdinalIgnoreCase))
@@ -241,7 +232,7 @@ internal sealed class Builder : IDisposable
 
             }
 
-            if (!ScanDependencies())
+            if (!ShouldScanDependencies())
                 return;
 
             var packageDependencies = package.GetPackageDependencies()?.ToArray();
@@ -268,6 +259,25 @@ internal sealed class Builder : IDisposable
         }
 
         throw new InvalidOperationException($"Package {packageIdentity} not found in any of the configured repositories: {string.Join(", ", lastExceptions)}");
+    }
+
+    private async Task<DownloadResourceResult> GetDownloadResultAsync(PackageIdentity packageIdentity, PackageDownloadContext context, string globalPackagesFolder, SourceRepository repository, ICollection<string> lastExceptions)
+    {
+        try
+        {
+            if (_offline)
+            {
+                return GlobalPackagesFolderUtility.GetPackage(packageIdentity, globalPackagesFolder);
+            }
+
+            var downloadResource = await repository.GetResourceAsync<DownloadResource>();
+            return await downloadResource.GetDownloadResourceResultAsync(packageIdentity, context, globalPackagesFolder, NullLogger.Instance, CancellationToken.None);
+        }
+        catch (NuGetProtocolException ex)
+        {
+            lastExceptions.Add(ex.Message);
+            return new DownloadResourceResult(DownloadResourceResultStatus.NotFound);
+        }
     }
 
     private async Task<string> CreateLicenseFile(IEnumerable<PackageArchiveReader> packages)

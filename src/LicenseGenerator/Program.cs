@@ -49,27 +49,32 @@ var excludeOption = new Option<string?>(new[] { "--exclude", "-e" }, """
     """) { IsRequired = false };
 
 var recursiveOption = new Option<bool>(new[] { "--recursive" }, """
-    A flag to indicate that all dependencies should be scanned recursively.                                                            
+    A flag to indicate that all dependencies should be scanned recursively.
+    """) { IsRequired = false };
+
+var offlineOption = new Option<bool>(new[] { "--offline" }, """
+    A flag to indicate that only the locally cached packages should be scanned (requires a restor beforehand).
     """) { IsRequired = false };
 
 rootCommand.AddOption(inputOption);
 rootCommand.AddOption(outputOption);
 rootCommand.AddOption(excludeOption);
 rootCommand.AddOption(recursiveOption);
-rootCommand.SetHandler(async (input, output, exclude, recursive) => returnValue = await Run(input, output, exclude, recursive), inputOption, outputOption, excludeOption, recursiveOption);
+rootCommand.AddOption(offlineOption);
+rootCommand.SetHandler(async (input, output, exclude, recursive, offline) => returnValue = await Run(input, output, exclude, recursive, offline), inputOption, outputOption, excludeOption, recursiveOption, offlineOption);
 
 await rootCommand.InvokeAsync(args);
 
 return returnValue;
 
-static async Task<int> Run(FileInfo input, string? output, string? exclude, bool recursive)
+static async Task<int> Run(FileInfo input, string? output, string? exclude, bool recursive, bool offline)
 {
     var visualStudioInstance = MSBuildLocator.QueryVisualStudioInstances().MaxBy(instance => instance.Version);
     MSBuildLocator.RegisterInstance(visualStudioInstance);
 
     try
     {
-        using var builder = new Builder(input, output ?? "Notice.txt", exclude, recursive);
+        using var builder = new Builder(input, output ?? "Notice.txt", exclude, recursive, offline);
         return await builder.Build();
     }
     catch (Exception ex)

@@ -5,7 +5,7 @@ This product bundles the following components under the described licenses:
 MSBuild Locator
 
 Id:      Microsoft.Build.Locator
-Version: 1.6.1
+Version: 1.6.10
 Project: https://github.com/microsoft/MSBuildLocator
 License: MIT
 

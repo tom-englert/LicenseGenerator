@@ -53,7 +53,7 @@ var recursiveOption = new Option<bool>(new[] { "--recursive" }, """
     """) { IsRequired = false };
 
 var offlineOption = new Option<bool>(new[] { "--offline" }, """
-    A flag to indicate that only the locally cached packages should be scanned (requires a restor beforehand).
+    A flag to indicate that only the locally cached packages should be scanned (requires a restore beforehand).
     """) { IsRequired = false };
 
 rootCommand.AddOption(inputOption);

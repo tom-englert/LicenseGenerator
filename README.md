@@ -44,7 +44,7 @@ build-license [options]
                                   Default is Notice.txt in the same folder as the solution.
   -e, --exclude <exclude>         A regular expression to specify package ids to exclude from output.
   --recursive                     A flag to indicate that all dependencies should be scanned recursively.
-  --offline                       A flag to indicate that only the locally cached packages should be scanned (requires a restor beforehand).
+  --offline                       A flag to indicate that only the locally cached packages should be scanned (requires a restore beforehand).
   --version                       Show version information
   -?, -h, --help                  Show help and usage information
 ```

@@ -157,3 +157,6 @@ dotnet_analyzer_diagnostic.severity = error
 
 # CA1305: Specify IFormatProvider
 dotnet_diagnostic.CA1305.severity = suggestion
+
+# VSSpell001: Spell Check
+dotnet_diagnostic.VSSpell001.severity = suggestion

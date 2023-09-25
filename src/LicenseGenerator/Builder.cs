@@ -30,7 +30,7 @@ internal sealed class Builder : IDisposable
     private readonly bool _offline;
     private readonly string _solutionDirectory;
     private readonly Regex? _excludeRegex;
-    private readonly Dictionary<NuGetFramework, TargetFrameworkCollection> _targetFrameworkCollections = new();
+    private readonly ProjectCollection _projectCollection = new();
     private readonly string _solutionFile;
 
     private ProjectInfo[] _projects = Array.Empty<ProjectInfo>();
@@ -58,7 +58,7 @@ internal sealed class Builder : IDisposable
 
         var solution = SolutionFile.Parse(_solutionFile);
 
-        _projects = LoadProjects(solution, _targetFrameworkCollections)
+        _projects = LoadProjects(solution)
             .ExceptNullItems()
             .ToArray();
 
@@ -336,7 +336,7 @@ internal sealed class Builder : IDisposable
                         var lines = stream.ReadLines().ToArray();
                         if (lines.FirstOrDefault()?.Contains("MIT License") == true)
                         {
-                            content.AppendLine("License: MIT");
+                            content.AppendLine(MitLicenseExpression);
                         }
                         else if (lines.Any(ExtensionMethods.IsApache2License))
                         {
@@ -436,7 +436,7 @@ internal sealed class Builder : IDisposable
         return bool.TryParse(property?.EvaluatedValue, out var include) && include;
     }
 
-    private static IEnumerable<ProjectInfo?> LoadProjects(SolutionFile solution, Dictionary<NuGetFramework, TargetFrameworkCollection> targetFrameworkCollections)
+    private IEnumerable<ProjectInfo?> LoadProjects(SolutionFile solution)
     {
         foreach (var projectReference in solution.ProjectsInOrder)
         {
@@ -451,7 +451,7 @@ internal sealed class Builder : IDisposable
 
                 var project = new Project(projectReference.AbsolutePath);
 
-                projectInfo = new ProjectInfo(projectReference, project, GetTargetFrameworks(project), targetFrameworkCollections);
+                projectInfo = new ProjectInfo(projectReference, project, GetTargetFrameworks(project), _projectCollection);
             }
             catch (Exception ex)
             {
@@ -477,7 +477,7 @@ internal sealed class Builder : IDisposable
         return frameworks ?? new[] { NuGetFramework.AnyFramework };
     }
 
-    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project, NuGetFramework[] TargetFrameworks, Dictionary<NuGetFramework, TargetFrameworkCollection> TargetFrameworkCollections)
+    private sealed record ProjectInfo(ProjectInSolution ProjectReference, Project Project, NuGetFramework[] TargetFrameworks, ProjectCollection ProjectCollection)
     {
         public IEnumerable<FrameworkSpecificProject> GetFrameworkSpecificProjects()
         {
@@ -493,9 +493,12 @@ internal sealed class Builder : IDisposable
             if (bestMatching == null)
                 return new FrameworkSpecificProject(Project, TargetFrameworks.FirstOrDefault() ?? NuGetFramework.AnyFramework);
 
-            var collection = TargetFrameworkCollections.ForceValue(bestMatching, framework => new TargetFrameworkCollection(framework));
+            var properties = new Dictionary<string, string>
+            {
+                { "TargetFramework", targetFramework.GetShortFolderName() }
+            };
 
-            return new FrameworkSpecificProject(collection.LoadProject(ProjectReference.AbsolutePath), bestMatching);
+            return new FrameworkSpecificProject(ProjectCollection.LoadProject(ProjectReference.AbsolutePath, properties, null), bestMatching);
         }
     }
 
@@ -504,31 +507,6 @@ internal sealed class Builder : IDisposable
         private LockFile? _lockFile;
 
         public LockFile LockFile => _lockFile ??= LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
-    }
-
-    private sealed class TargetFrameworkCollection : IDisposable
-    {
-        private readonly ProjectCollection _projectCollection;
-
-        public TargetFrameworkCollection(NuGetFramework framework)
-        {
-            var properties = new Dictionary<string, string>
-            {
-                { "TargetFramework", framework.GetShortFolderName() }
-            };
-
-            _projectCollection = new ProjectCollection(properties);
-        }
-
-        public Project LoadProject(string filePath)
-        {
-            return _projectCollection.LoadProject(filePath);
-        }
-
-        public void Dispose()
-        {
-            _projectCollection.Dispose();
-        }
     }
 
     private static async Task<ICollection<string>> DownloadLicense(string url)
@@ -546,9 +524,6 @@ internal sealed class Builder : IDisposable
 
     public void Dispose()
     {
-        foreach (var collection in _targetFrameworkCollections.Values)
-        {
-            collection.Dispose();
-        }
+        _projectCollection.Dispose();
     }
 }

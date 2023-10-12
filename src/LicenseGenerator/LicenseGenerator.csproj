@@ -16,7 +16,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <AnalyzerLevel>latest-All</AnalyzerLevel>
+    <AnalysisMode>All</AnalysisMode>
   </PropertyGroup>
 
   <PropertyGroup Label="Pack">

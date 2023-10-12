@@ -17,9 +17,14 @@ internal static class ExtensionMethods
         }
     }
 
-    public static bool IsApache2License(this string? value)
+    public static bool IsApache2LicenseUrl(this string? value)
     {
         return value?.Contains(Constants.ApacheLicenseUrl, StringComparison.OrdinalIgnoreCase) == true;
+    }
+    public static bool IsApache2LicenseText(this string? value)
+    {
+        return value?.Contains(Constants.ApacheLicenseTitle, StringComparison.OrdinalIgnoreCase) == true
+            || value?.Contains(Constants.ApacheLicenseUrl, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     public static bool IsMicrosoftNetLibrary(this string? value)
@@ -27,10 +32,17 @@ internal static class ExtensionMethods
         return value?.Equals(Constants.MicrosoftNetLibraryUrl, StringComparison.OrdinalIgnoreCase) == true;
     }
 
-    public static string FormatLicenseText(this IEnumerable<string> lines)
+    public static bool IsMitLicenseText(this string? value)
     {
-        return lines
-            .Aggregate(new StringBuilder(), (builder, s) => builder.AppendLine($"> {s}"))
-            .ToString();
+        return value?.Contains(Constants.MitLicenseTitle, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    public static string FormatLicenseText(this string text)
+    {
+        return string.IsNullOrEmpty(text)
+            ? string.Empty
+            : text.Split('\n')
+                .Aggregate(new StringBuilder(), (builder, s) => builder.AppendLine($"> {s.TrimEnd()}"))
+                .ToString();
     }
 }

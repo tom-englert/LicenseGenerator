@@ -130,7 +130,7 @@ internal sealed class Builder : IDisposable
             if (packageReference.GetMetadata("PrivateAssets") != null)
                 continue;
 
-            if (packageReference.GetMetadata("ExcludeAssets")?.EvaluatedValue.Contains("runtime") == true)
+            if (packageReference.GetMetadata("ExcludeAssets")?.EvaluatedValue.Contains("runtime", StringComparison.OrdinalIgnoreCase) == true)
                 continue;
 
             var identity = packageReference.EvaluatedInclude;
@@ -298,12 +298,6 @@ internal sealed class Builder : IDisposable
 
             var projectUrl = spec.GetProjectUrl();
 
-            if (string.IsNullOrEmpty(projectUrl))
-            {
-                Output.WriteLine($"Skip {packageId}: No project URL");
-                continue;
-            }
-
             if (_excludeRegex?.IsMatch(packageId) == true)
             {
                 Output.WriteLine($"Skip {packageId}: Excluded");
@@ -333,26 +327,26 @@ internal sealed class Builder : IDisposable
                         var license = licenseMetadata.License;
                         var file = package.GetEntry(license);
                         using var stream = new StreamReader(file.Open());
-                        var lines = stream.ReadLines().ToArray();
-                        if (lines.FirstOrDefault()?.Contains("MIT License") == true)
+                        var licenseText = await stream.ReadToEndAsync();
+                        if (licenseText.IsMitLicenseText())
                         {
                             content.AppendLine(MitLicenseExpression);
                         }
-                        else if (lines.Any(ExtensionMethods.IsApache2License))
+                        else if (licenseText.IsApache2LicenseText())
                         {
                             content.AppendLine(ApacheLicenseExpression);
                         }
                         else
                         {
                             content.AppendLine("License:");
-                            content.AppendLine(lines.FormatLicenseText());
+                            content.AppendLine(licenseText.FormatLicenseText());
                         }
                     }
                 }
                 else
                 {
                     var licenseUrl = spec.GetLicenseUrl();
-                    if (licenseUrl.IsApache2License())
+                    if (licenseUrl.IsApache2LicenseUrl())
                     {
                         content.AppendLine(ApacheLicenseExpression);
                     }
@@ -362,19 +356,24 @@ internal sealed class Builder : IDisposable
                     }
                     else
                     {
-                        var lines = await DownloadLicense(licenseUrl);
+                        var licenseText = await DownloadLicense(licenseUrl);
 
-                        if (lines.Any(ExtensionMethods.IsApache2License))
+                        if (licenseText.IsApache2LicenseText())
                         {
-                            content.AppendLine(ApacheLicenseExpression);
+                            content.AppendLine($"{ApacheLicenseExpression} ({licenseUrl}) ");
+                        }
+                        else
+                        if (licenseText.IsMitLicenseText())
+                        {
+                            content.AppendLine($"{MitLicenseExpression} ({licenseUrl}) ");
                         }
                         else
                         {
-                            content.AppendLine($"License: {licenseUrl}");
+                            content.AppendLine($"License: {licenseUrl ?? "UNKNOWN"}");
 
-                            if (!lines.Any(line => line.StartsWith("<html", StringComparison.OrdinalIgnoreCase)))
+                            if (!licenseText.Contains("<html>", StringComparison.OrdinalIgnoreCase))
                             {
-                                content.AppendLine(lines.FormatLicenseText());
+                                content.AppendLine(licenseText.FormatLicenseText());
                             }
                         }
                     }
@@ -509,16 +508,18 @@ internal sealed class Builder : IDisposable
         public LockFile LockFile => _lockFile ??= LockFileUtilities.GetLockFile(Project.GetPropertyValue("ProjectAssetsFile"), NullLogger.Instance);
     }
 
-    private static async Task<ICollection<string>> DownloadLicense(string url)
+    private static async Task<string> DownloadLicense(string url)
     {
         try
         {
-            using var stream = new StreamReader(await new HttpClient().GetStreamAsync(url));
-            return stream.ReadLines().ToArray();
+            using var httpClient = new HttpClient();
+            using var stream = new StreamReader(await httpClient.GetStreamAsync(new Uri(url)));
+
+            return await stream.ReadToEndAsync();
         }
         catch
         {
-            return Array.Empty<string>();
+            return string.Empty;
         }
     }
 

@@ -22,6 +22,7 @@ using static Constants;
 
 internal sealed class Builder : IDisposable
 {
+    private static readonly DelegateEqualityComparer<ProjectItem> ItemIncludeComparer = new(item => item?.EvaluatedInclude.ToUpperInvariant());
     private static readonly string Delimiter = new('-', 80);
 
     private readonly Dictionary<string, ProjectInfo> _includedProjects = new(StringComparer.OrdinalIgnoreCase);
@@ -123,9 +124,20 @@ internal sealed class Builder : IDisposable
         return resolvedPackages.Values;
     }
 
-    private static IEnumerable<PackageIdentity> GetPackageIdentities(FrameworkSpecificProject project)
+    private static IEnumerable<PackageIdentity> GetPackageIdentities(FrameworkSpecificProject frameworkSpecific)
     {
-        foreach (var packageReference in project.Project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
+        var project = frameworkSpecific.Project;
+
+        var useCentralPackageManagement = project.GetProperty("ManagePackageVersionsCentrally").IsTrue();
+
+        var versionMap = useCentralPackageManagement
+            ? project
+                .GetItems("PackageVersion")
+                .Distinct(ItemIncludeComparer)
+                .ToDictionary(item => item.EvaluatedInclude, item => item)
+            : null;
+
+        foreach (var packageReference in project.AllEvaluatedItems.Where(item => item.ItemType == "PackageReference"))
         {
             if (packageReference.GetMetadata("PrivateAssets") != null)
                 continue;
@@ -134,12 +146,17 @@ internal sealed class Builder : IDisposable
                 continue;
 
             var identity = packageReference.EvaluatedInclude;
-            var version = packageReference.GetMetadata("Version")?.EvaluatedValue;
+            var versionMetadata = !useCentralPackageManagement
+                ? packageReference.GetMetadata("Version")
+                : packageReference.GetMetadata("VersionOverride")
+                    ?? versionMap?.GetValueOrDefault(identity)?.GetMetadata("Version");
+
+            var version = versionMetadata?.EvaluatedValue;
 
             if (string.IsNullOrEmpty(version))
                 continue;
 
-            yield return GetPackageIdentity(project, identity, version);
+            yield return GetPackageIdentity(frameworkSpecific, identity, version);
         }
     }
 

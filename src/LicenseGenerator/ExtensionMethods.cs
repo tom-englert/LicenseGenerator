@@ -1,5 +1,7 @@
 ﻿using System.Text;
 
+using Microsoft.Build.Evaluation;
+
 namespace LicenseGenerator;
 
 internal static class ExtensionMethods
@@ -44,5 +46,10 @@ internal static class ExtensionMethods
             : text.Split('\n')
                 .Aggregate(new StringBuilder(), (builder, s) => builder.AppendLine($"> {s.TrimEnd()}"))
                 .ToString();
+    }
+
+    public static bool IsTrue(this ProjectProperty? property)
+    {
+        return "true".Equals(property?.EvaluatedValue, StringComparison.OrdinalIgnoreCase);
     }
 }

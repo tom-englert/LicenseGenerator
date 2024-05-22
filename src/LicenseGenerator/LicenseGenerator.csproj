@@ -55,16 +55,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Build" Version="[17.4.0]" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.Build.Locator" Version="1.6.10" />
+    <PackageReference Include="Microsoft.Build.Locator" Version="1.7.8" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" Version="[17.4.0]" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="all" />
-    <PackageReference Include="NuGet.ProjectModel" Version="6.7.0" />
-    <PackageReference Include="NuGet.Protocol" Version="6.7.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="all" />
+    <PackageReference Include="NuGet.ProjectModel" Version="6.10.0" />
+    <PackageReference Include="NuGet.Protocol" Version="6.10.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
-    <PackageReference Include="TomsToolbox.Essentials" Version="2.8.10" />
+    <PackageReference Include="TomsToolbox.Essentials" Version="2.14.0" />
   </ItemGroup>
 
   <Target Name="CreateNotice" AfterTargets="Build">
-    <Exec Command='"$(RunCommand)" -i ../LicenseGenerator.sln -o ..\..\Notice.txt' />
+    <Exec Command="&quot;$(RunCommand)&quot; -i ../LicenseGenerator.sln -o ..\..\Notice.txt" />
   </Target>
 </Project>

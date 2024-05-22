@@ -10,9 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Nullable.Extended.Analyzer" Version="1.10.4539" PrivateAssets="all" />
-    <PackageReference Include="TomsToolbox.Essentials" Version="2.8.10" Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp'" />
-    <PackageReference Include="TomsToolbox.Essentials" Version="2.8.9" Condition="'$(TargetFrameworkIdentifier)' == '.NetFramework'" />
+    <PackageReference Include="Nullable.Extended.Analyzer" Version="1.15.6169" PrivateAssets="all" />
+    <PackageReference Include="TomsToolbox.Essentials" Version="2.14.0" Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp'" />
+    <PackageReference Include="TomsToolbox.Essentials" Version="2.14.0" Condition="'$(TargetFrameworkIdentifier)' == '.NetFramework'" />
   </ItemGroup>
 
 </Project>

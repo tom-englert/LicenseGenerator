@@ -325,9 +325,12 @@ internal sealed class Builder : IDisposable
                 .AppendLine()
                 .AppendLine(spec.GetTitle().NullWhenEmpty() ?? packageId)
                 .AppendLine()
-                .AppendLine($"Id:      {packageId}")
-                .AppendLine($"Version: {spec.GetVersion()}")
-                .AppendLine($"Project: {projectUrl}");
+                .AppendLine($"Id:        {packageId}")
+                .AppendLine($"Version:   {spec.GetVersion()}")
+                .AppendLine($"Project:   {projectUrl}")
+                .AppendLine($"Copyright: {spec.GetCopyright()}");
+
+            const string? licensePrefix = "License:   ";
 
             var licenseMetadata = spec.GetLicenseMetadata();
 
@@ -337,7 +340,7 @@ internal sealed class Builder : IDisposable
                 {
                     if (licenseMetadata.Type == LicenseType.Expression)
                     {
-                        content.AppendLine($"License: {licenseMetadata.LicenseExpression}");
+                        content.AppendLine($"{licensePrefix}{licenseMetadata.LicenseExpression}");
                     }
                     else
                     {
@@ -347,7 +350,7 @@ internal sealed class Builder : IDisposable
                         var licenseText = await stream.ReadToEndAsync();
                         if (licenseText.IsMitLicenseText())
                         {
-                            content.AppendLine(MitLicenseExpression);
+                            content.AppendLine($"{licensePrefix}{MitLicenseExpression}");
                         }
                         else if (licenseText.IsApache2LicenseText())
                         {
@@ -365,7 +368,7 @@ internal sealed class Builder : IDisposable
                     var licenseUrl = spec.GetLicenseUrl();
                     if (licenseUrl.IsApache2LicenseUrl())
                     {
-                        content.AppendLine(ApacheLicenseExpression);
+                        content.AppendLine($"{licensePrefix}{ApacheLicenseExpression}");
                     }
                     else if (licenseUrl.IsMicrosoftNetLibrary())
                     {
@@ -377,16 +380,16 @@ internal sealed class Builder : IDisposable
 
                         if (licenseText.IsApache2LicenseText())
                         {
-                            content.AppendLine($"{ApacheLicenseExpression} ({licenseUrl}) ");
+                            content.AppendLine($"{licensePrefix}{ApacheLicenseExpression} ({licenseUrl}) ");
                         }
                         else
                         if (licenseText.IsMitLicenseText())
                         {
-                            content.AppendLine($"{MitLicenseExpression} ({licenseUrl}) ");
+                            content.AppendLine($"{licensePrefix}{MitLicenseExpression} ({licenseUrl}) ");
                         }
                         else
                         {
-                            content.AppendLine($"License: {licenseUrl ?? "UNKNOWN"}");
+                            content.AppendLine($"{licensePrefix}{licenseUrl ?? "UNKNOWN"}");
 
                             if (!licenseText.Contains("<html>", StringComparison.OrdinalIgnoreCase))
                             {
